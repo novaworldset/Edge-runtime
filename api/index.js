@@ -1,10 +1,13 @@
-
-//Edge-runtime Run API 
+// Edge-runtime  - Optimized for Vercel
 export const config = { runtime: "edge" };
 
 const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
 
-const STRIP_HEADERS = new Set([
+if (!TARGET_BASE) {
+  console.error("TARGET_DOMAIN environment variable is not set!");
+}
+
+const FORBIDDEN_HEADERS = new Set([
   "host",
   "connection",
   "keep-alive",
@@ -18,47 +21,69 @@ const STRIP_HEADERS = new Set([
   "x-forwarded-host",
   "x-forwarded-proto",
   "x-forwarded-port",
+  "x-vercel-",
 ]);
 
 export default async function handler(req) {
   if (!TARGET_BASE) {
-    return new Response("Misconfigured: TARGET_DOMAIN is not set", { status: 500 });
+    return new Response("Misconfigured: TARGET_DOMAIN is not set", { 
+      status: 500,
+      headers: { "content-type": "text/plain" }
+    });
   }
 
   try {
-    const pathStart = req.url.indexOf("/", 8);
-    const targetUrl =
-      pathStart === -1 ? TARGET_BASE + "/" : TARGET_BASE + req.url.slice(pathStart);
+    // Extract path
+    const url = new URL(req.url);
+    const targetUrl = `${TARGET_BASE}${url.pathname}${url.search}`;
 
-    const out = new Headers();
-    let clientIp = null;
-    for (const [k, v] of req.headers) {
-      if (STRIP_HEADERS.has(k)) continue;
-      if (k.startsWith("x-vercel-")) continue;
-      if (k === "x-real-ip") {
-        clientIp = v;
+    const headers = new Headers();
+
+    // Copy headers with filtering
+    for (const [key, value] of req.headers) {
+      const lowerKey = key.toLowerCase();
+      
+      if (FORBIDDEN_HEADERS.has(lowerKey) || lowerKey.startsWith("x-vercel-")) {
         continue;
       }
-      if (k === "x-forwarded-for") {
-        if (!clientIp) clientIp = v;
+
+      if (lowerKey === "x-real-ip" || lowerKey === "x-forwarded-for") {
+        headers.set("x-forwarded-for", value);
         continue;
       }
-      out.set(k, v);
+
+      headers.set(key, value);
     }
-    if (clientIp) out.set("x-forwarded-for", clientIp);
 
-    const method = req.method;
-    const hasBody = method !== "GET" && method !== "HEAD";
+    // Add original host for backend
+    headers.set("x-forwarded-host", url.host);
+    headers.set("x-forwarded-proto", "https");
 
-    return await fetch(targetUrl, {
-      method,
-      headers: out,
+    const hasBody = !["GET", "HEAD"].includes(req.method);
+
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers,
       body: hasBody ? req.body : undefined,
       duplex: "half",
       redirect: "manual",
     });
+
+    // Return response with original headers (except restricted ones)
+    const outHeaders = new Headers(response.headers);
+    
+    // Remove problematic headers for Vercel
+    outHeaders.delete("content-encoding"); // Vercel usually handles this
+    outHeaders.delete("transfer-encoding");
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: outHeaders,
+    });
+
   } catch (err) {
-    console.error("relay error:", err);
-    return new Response("Bad Gateway: Tunnel Failed", { status: 502 });
+    console.error("Proxy error:", err);
+    return new Response("Bad Gateway", { status: 502 });
   }
 }
