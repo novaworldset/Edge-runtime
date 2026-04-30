@@ -1,7 +1,6 @@
 {
-  "name": "Edge-runtime",
+  "name": "api-performance-monitor",
   "version": "1.0.0",
-  "description": "Edge-runtime",
   "private": true,
-  "license": "MIT"
+  "dependencies": {}
 }
