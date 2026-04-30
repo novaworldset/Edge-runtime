@@ -1,4 +1,4 @@
-// Edge-runtime CDN
+// Edge-runtime CDN-like Proxy - Version 3
 export const config = { runtime: "edge" };
 
 const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
@@ -11,7 +11,9 @@ const STRIP_HEADERS = new Set([
 
 export default async function handler(req) {
   if (!TARGET_BASE) {
-    return new Response("Misconfigured", { status: 500 });
+    return new Response("Misconfigured: TARGET_DOMAIN is not set", { 
+      status: 500 
+    });
   }
 
   try {
@@ -31,7 +33,7 @@ export default async function handler(req) {
       headers.set(k, v);
     }
 
-    // Headers شبیه CDN
+    // شبیه‌سازی CDN
     headers.set("x-forwarded-host", url.host);
     headers.set("x-forwarded-proto", "https");
 
@@ -44,17 +46,15 @@ export default async function handler(req) {
     });
 
     const outHeaders = new Headers(response.headers);
-
-    // هدرهای CDN-like
+    
     outHeaders.set("server", "Vercel-Edge");
     outHeaders.set("via", "1.1 Vercel-Edge");
     outHeaders.set("x-cdn", "Vercel-Edge-CDN");
-    outHeaders.set("cache-control", response.headers.get("cache-control") || "public, max-age=0, must-revalidate");
 
-    // حذف هدرهای مشکل‌ساز برای Vercel
+    // حذف هدرهای مشکل‌ساز
     outHeaders.delete("content-encoding");
     outHeaders.delete("transfer-encoding");
-    outHeaders.delete("content-length"); // Vercel خودش مدیریت می‌کنه
+    outHeaders.delete("content-length");
 
     return new Response(response.body, {
       status: response.status,
@@ -64,9 +64,6 @@ export default async function handler(req) {
 
   } catch (err) {
     console.error("Proxy error:", err);
-    return new Response("Service Unavailable", { 
-      status: 503,
-      headers: { "content-type": "text/plain" }
-    });
+    return new Response("Service Unavailable", { status: 503 });
   }
 }
