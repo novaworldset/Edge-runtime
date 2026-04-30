@@ -22,10 +22,18 @@ const IGNORED_HEADERS = new Set([
 export default async function handler(req) {
   const url = new URL(req.url);
 
-  // Health check endpoint for monitoring tools
+  // Health check endpoint for the professional UI monitoring tools
   if (url.pathname === "/api/health") {
-    return new Response(JSON.stringify({ status: "active", latency: "normal" }), {
-      headers: { "content-type": "application/json" }
+    return new Response(JSON.stringify({ 
+      status: "active", 
+      latency: "normal",
+      node: "Vercel-Edge-Cluster",
+      timestamp: Date.now()
+    }), {
+      headers: { 
+        "content-type": "application/json",
+        "Access-Control-Allow-Origin": "*" 
+      }
     });
   }
 
@@ -35,6 +43,7 @@ export default async function handler(req) {
 
   try {
     // Standardize request path for endpoint testing
+    // This removes the /api prefix before forwarding to the target
     const internalPath = url.pathname.replace(/^\/api/, "");
     const requestUrl = UPSTREAM_ENDPOINT + internalPath + url.search;
 
@@ -51,10 +60,13 @@ export default async function handler(req) {
       method: req.method,
       headers: filteredHeaders,
       body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
+      duplex: "half",
       redirect: "follow",
     });
 
     const outputHeaders = new Headers(response.headers);
+    
+    // Remove content-encoding to allow Vercel to optimize the delivery
     outputHeaders.delete("content-encoding");
 
     return new Response(response.body, {
