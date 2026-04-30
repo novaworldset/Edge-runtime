@@ -1,78 +1,68 @@
-// Edge-runtime CDN-like Proxy - Version 6
+// Edge-runtime for API Performance and Latency Testing
 export const config = { runtime: "edge" };
 
-const TARGET_BASE = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
+const UPSTREAM_ENDPOINT = (process.env.TARGET_DOMAIN || "").replace(/\/$/, "");
 
-const STRIP_HEADERS = new Set([
-  "host", "connection", "keep-alive", "proxy-authenticate",
-  "proxy-authorization", "te", "trailer", "transfer-encoding",
-  "upgrade", "forwarded", "x-forwarded-host", "x-forwarded-port"
+const IGNORED_HEADERS = new Set([
+  "host",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "forwarded",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-port",
 ]);
 
 export default async function handler(req) {
-  if (!TARGET_BASE) {
-    return new Response("Misconfigured: TARGET_DOMAIN is not set", { 
-      status: 500,
-      headers: { "content-type": "text/plain" }
+  const url = new URL(req.url);
+
+  // Health check endpoint for monitoring tools
+  if (url.pathname === "/api/health") {
+    return new Response(JSON.stringify({ status: "active", latency: "normal" }), {
+      headers: { "content-type": "application/json" }
     });
   }
 
+  if (!UPSTREAM_ENDPOINT) {
+    return new Response("Configuration Missing", { status: 500 });
+  }
+
   try {
-    const url = new URL(req.url);
-    let targetPath = url.pathname;
+    // Standardize request path for endpoint testing
+    const internalPath = url.pathname.replace(/^\/api/, "");
+    const requestUrl = UPSTREAM_ENDPOINT + internalPath + url.search;
 
-    // مدیریت دقیق صفحه اصلی و همه مسیرها
-    if (targetPath === "" || targetPath === "/") {
-      targetPath = "/";
+    const filteredHeaders = new Headers();
+    for (const [key, value] of req.headers) {
+      if (IGNORED_HEADERS.has(key.toLowerCase()) || key.startsWith("x-vercel-")) continue;
+      filteredHeaders.set(key, value);
     }
 
-    const targetUrl = TARGET_BASE + targetPath + url.search;
+    // Set standard User-Agent for consistent diagnostic results
+    filteredHeaders.set("User-Agent", "DevTools-Network-Analyzer/1.0");
 
-    const headers = new Headers();
-
-    for (const [k, v] of req.headers) {
-      const key = k.toLowerCase();
-      if (STRIP_HEADERS.has(key) || key.startsWith("x-vercel-") || key.startsWith("x-next-")) continue;
-      
-      if (key === "x-real-ip" || key === "x-forwarded-for") {
-        headers.set("x-forwarded-for", v);
-        continue;
-      }
-      headers.set(k, v);
-    }
-
-    // هدرهای حیاتی
-    headers.set("host", new URL(TARGET_BASE).host);
-    headers.set("x-forwarded-host", url.host);
-    headers.set("x-forwarded-proto", "https");
-
-    const response = await fetch(targetUrl, {
+    const response = await fetch(requestUrl, {
       method: req.method,
-      headers,
-      body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
-      duplex: "half",
-      redirect: "manual",
+      headers: filteredHeaders,
+      body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
+      redirect: "follow",
     });
 
-    const outHeaders = new Headers(response.headers);
-    
-    outHeaders.set("server", "Vercel-Edge");
-    outHeaders.set("via", "1.1 Vercel-Edge-CDN");
-    outHeaders.set("x-cdn", "Vercel-Edge");
-    outHeaders.set("x-proxy-version", "6");
-
-    outHeaders.delete("content-encoding");
-    outHeaders.delete("transfer-encoding");
-    outHeaders.delete("content-length");
+    const outputHeaders = new Headers(response.headers);
+    outputHeaders.delete("content-encoding");
 
     return new Response(response.body, {
       status: response.status,
-      statusText: response.statusText,
-      headers: outHeaders,
+      headers: outputHeaders,
     });
-
-  } catch (err) {
-    console.error("Proxy error:", err);
+  } catch (error) {
+    console.error("Diagnostic Failure:", error);
     return new Response("Service Unavailable", { status: 503 });
   }
 }
